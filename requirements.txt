@@ -7,5 +7,5 @@ matplotlib
 statsmodels
 huggingface-hub
 joblib
-numpy==1.23.5
-shap==0.44.1
+numpy
+shap
