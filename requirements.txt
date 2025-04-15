@@ -8,3 +8,4 @@ matplotlib
 statsmodels
 huggingface-hub
 joblib
+shap==0.44.1
