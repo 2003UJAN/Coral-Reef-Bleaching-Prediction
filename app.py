@@ -1,90 +1,190 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import shap
 import joblib
-import tensorflow as tf
+import os
+from huggingface_hub import hf_hub_download
+from statsmodels.tsa.arima.model import ARIMA
 import matplotlib.pyplot as plt
 
-from sklearn.preprocessing import StandardScaler
-from xgboost import XGBClassifier
+# For LSTM
+from tensorflow.keras.models import load_model
 
-# Load models and preprocessing objects from root directory
-lstm_model = tf.keras.models.load_model("lstm_model.h5")
-xgb_model = joblib.load("xgb_model.pkl")
-scaler = joblib.load("scaler.pkl")
+# For XGBoost
+from xgboost import XGBRegressor
 
-st.set_page_config(page_title="Coral Reef Health Prediction", layout="wide")
+# --- CONFIGURATION ---
+RF_REPO_ID = "ujan2003/rf_model.pkl"
+RF_FILENAME = "rf_model.pkl"
+XGB_MODEL_PATH = "xgb_model.pkl"  # Place your XGBoost model here
+LSTM_MODEL_PATH = "lstm_model.h5" # Place your LSTM model here
+SCALER_PATH = "scaler.pkl"        # Place your StandardScaler here
 
-st.title("🌊 Coral Reef Health Prediction App")
-st.markdown("""
-This app uses **LSTM** and **XGBoost** to predict coral reef health status from environmental and sensor data.
-""")
+# --- LOAD MODELS ---
+@st.cache_resource
+def load_rf_model():
+    model_path = hf_hub_download(repo_id=RF_REPO_ID, filename=RF_FILENAME, revision="main")
+    return joblib.load(model_path)
 
-# Upload CSV
-uploaded_file = st.file_uploader("Upload Coral Reef Data (.csv)", type=["csv"])
+@st.cache_resource
+def load_xgb_model():
+    if os.path.exists(XGB_MODEL_PATH):
+        return joblib.load(XGB_MODEL_PATH)
+    else:
+        return None
 
-if uploaded_file:
-    data = pd.read_csv(uploaded_file)
-    st.subheader("📄 Uploaded Data")
-    st.dataframe(data.head())
+@st.cache_resource
+def load_lstm_model():
+    if os.path.exists(LSTM_MODEL_PATH):
+        return load_model(LSTM_MODEL_PATH)
+    else:
+        return None
 
-    # Preprocessing
-    try:
-        scaled_data = scaler.transform(data)
-    except Exception as e:
-        st.error(f"Scaling error: {e}")
-        st.stop()
-    
-    # LSTM input needs 3D: (samples, timesteps, features)
-    try:
-        lstm_input = np.reshape(scaled_data, (scaled_data.shape[0], 1, scaled_data.shape[1]))
-        lstm_prediction = lstm_model.predict(lstm_input)
-        lstm_prediction = (lstm_prediction > 0.5).astype(int)
-    except Exception as e:
-        st.error(f"LSTM prediction error: {e}")
-        lstm_prediction = None
+@st.cache_resource
+def load_scaler():
+    if os.path.exists(SCALER_PATH):
+        return joblib.load(SCALER_PATH)
+    else:
+        return None
 
-    # XGBoost prediction
-    try:
-        xgb_prediction = xgb_model.predict(scaled_data)
-        xgb_proba = xgb_model.predict_proba(scaled_data)
-    except Exception as e:
-        st.error(f"XGBoost prediction error: {e}")
-        xgb_prediction = None
+# --- MAIN APP ---
+def main():
+    st.title("Coral Reef Bleaching Prediction Web App")
+    st.markdown("Predict coral bleaching using environmental factors and ML models (Random Forest, XGBoost, LSTM, ARIMA).")
 
-    st.subheader("🧠 Model Predictions")
-    if lstm_prediction is not None:
-        st.write("**LSTM Predictions** (0 = Healthy, 1 = At Risk)")
-        st.write(lstm_prediction.flatten())
-    if xgb_prediction is not None:
-        st.write("**XGBoost Predictions** (0 = Healthy, 1 = At Risk)")
-        st.write(xgb_prediction)
+    # --- DATA UPLOAD ---
+    uploaded_file = st.file_uploader("Upload your coral reef dataset (CSV)", type="csv")
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_csv("coralreef_dataset.csv")
 
-    # SHAP Explanation for XGBoost
-    st.subheader("📈 XGBoost Model Explanation (SHAP)")
-    try:
-        explainer = shap.Explainer(xgb_model)
-        shap_values = explainer(scaled_data)
+    # --- FEATURE SELECTION ---
+    features = [
+        'Cyclone_Frequency', 'Depth_m', 'ClimSST', 'Turbidity',
+        'Temperature_Maximum', 'SSTA', 'TSA', 'Temperature_Mean'
+    ]
+    target = 'Percent_Bleaching'
 
-        # Visualize SHAP summary
-        st.set_option('deprecation.showPyplotGlobalUse', False)
-        plt.title("SHAP Summary Plot")
-        shap.summary_plot(shap_values, features=data, plot_type="bar")
-        st.pyplot(bbox_inches='tight')
+    # --- MODEL SELECTION ---
+    model_type = st.selectbox("Select Model", ["Random Forest (HuggingFace)", "XGBoost", "LSTM", "ARIMA"])
 
-        # Force plot for the first prediction
-        st.subheader("🧪 SHAP Force Plot for First Prediction")
-        shap.initjs()
-        st.components.v1.html(
-            shap.plots.force(explainer.expected_value, shap_values[0], data.iloc[0]).html(),
-            height=300,
-        )
-    except Exception as e:
-        st.error(f"SHAP explanation error: {e}")
+    # --- PREPROCESSING ---
+    df = df.copy()
+    for col in features:
+        if col not in df.columns:
+            st.error(f"Column '{col}' not found in data!")
+            return
+    df = df.dropna(subset=features)
+    X = df[features]
+    y = df[target] if target in df.columns else None
 
-else:
-    st.info("Please upload a CSV file to get predictions.")
+    # --- PREDICTION ---
+    if model_type == "Random Forest (HuggingFace)":
+        rf_model = load_rf_model()
+        scaler = load_scaler()
+        if scaler:
+            X_scaled = scaler.transform(X)
+        else:
+            X_scaled = X
+        preds = rf_model.predict(X_scaled)
+        df['Predicted_Bleaching'] = preds
+        st.write("Random Forest Predictions (last 10 rows):")
+        st.dataframe(df[features + ['Predicted_Bleaching']].tail(10))
+        st.line_chart(df['Predicted_Bleaching'])
 
-st.markdown("---")
-st.caption("© 2025 Coral Reef AI Project | Built with Streamlit, LSTM, XGBoost & SHAP")
+    elif model_type == "XGBoost":
+        xgb_model = load_xgb_model()
+        scaler = load_scaler()
+        if xgb_model is None:
+            st.warning("XGBoost model not found. Please train and save as 'xgb_model.pkl'.")
+        else:
+            if scaler:
+                X_scaled = scaler.transform(X)
+            else:
+                X_scaled = X
+            preds = xgb_model.predict(X_scaled)
+            df['Predicted_Bleaching'] = preds
+            st.write("XGBoost Predictions (last 10 rows):")
+            st.dataframe(df[features + ['Predicted_Bleaching']].tail(10))
+            st.line_chart(df['Predicted_Bleaching'])
+
+    elif model_type == "LSTM":
+        lstm_model = load_lstm_model()
+        scaler = load_scaler()
+        if lstm_model is None:
+            st.warning("LSTM model not found. Please train and save as 'lstm_model.h5'.")
+        else:
+            if scaler:
+                X_scaled = scaler.transform(X)
+            else:
+                X_scaled = X
+            X_lstm = X_scaled.reshape((X_scaled.shape[0], X_scaled.shape[1], 1))
+            preds = lstm_model.predict(X_lstm).flatten()
+            df['Predicted_Bleaching'] = preds
+            st.write("LSTM Predictions (last 10 rows):")
+            st.dataframe(df[features + ['Predicted_Bleaching']].tail(10))
+            st.line_chart(df['Predicted_Bleaching'])
+
+    elif model_type == "ARIMA":
+        if 'Date_Year' not in df.columns or target not in df.columns:
+            st.warning("ARIMA requires 'Date_Year' and 'Percent_Bleaching' columns.")
+        else:
+            df['Date'] = pd.to_datetime(df['Date_Year'], format='%Y', errors='coerce')
+            ts = df.groupby('Date')[target].mean().dropna()
+            st.write("Time Series of Bleaching (Yearly Mean):")
+            st.line_chart(ts)
+            steps = st.slider("Forecast years into the future", 1, 10, 5)
+            model = ARIMA(ts, order=(2,1,2))
+            results = model.fit()
+            forecast = results.get_forecast(steps=steps)
+            pred_index = pd.date_range(ts.index[-1], periods=steps+1, freq='Y')[1:]
+            pred_mean = forecast.predicted_mean
+            pred_ci = forecast.conf_int()
+            # Plot
+            fig, ax = plt.subplots()
+            ts.plot(ax=ax, label='Observed')
+            ax.plot(pred_index, pred_mean, label='Forecast', color='orange')
+            ax.fill_between(pred_index, pred_ci.iloc[:,0], pred_ci.iloc[:,1], color='orange', alpha=0.3)
+            ax.legend()
+            st.pyplot(fig)
+
+    # --- INDIVIDUAL PREDICTION ---
+    st.sidebar.header("Predict for Custom Input")
+    input_data = {}
+    for col in features:
+        min_val = float(df[col].min())
+        max_val = float(df[col].max())
+        mean_val = float(df[col].mean())
+        input_data[col] = st.sidebar.slider(col, min_val, max_val, mean_val)
+    input_df = pd.DataFrame([input_data])
+
+    if st.sidebar.button("Predict Bleaching for Input"):
+        scaler = load_scaler()
+        if scaler:
+            input_scaled = scaler.transform(input_df)
+        else:
+            input_scaled = input_df.values
+        if model_type == "Random Forest (HuggingFace)":
+            rf_model = load_rf_model()
+            pred = rf_model.predict(input_scaled)[0]
+        elif model_type == "XGBoost":
+            xgb_model = load_xgb_model()
+            if xgb_model is None:
+                st.sidebar.warning("XGBoost model not found.")
+                return
+            pred = xgb_model.predict(input_scaled)[0]
+        elif model_type == "LSTM":
+            lstm_model = load_lstm_model()
+            if lstm_model is None:
+                st.sidebar.warning("LSTM model not found.")
+                return
+            input_lstm = input_scaled.reshape((1, len(features), 1))
+            pred = lstm_model.predict(input_lstm)[0][0]
+        else:
+            st.sidebar.warning("Custom input prediction not supported for ARIMA.")
+            return
+        st.sidebar.success(f"Predicted Bleaching: {pred:.2f}%")
+
+if _name_ == "_main_":
+    main()
