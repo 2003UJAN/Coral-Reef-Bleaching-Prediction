@@ -50,7 +50,7 @@ def load_scaler():
 # --- MAIN APP ---
 def main():
     st.title("Coral Reef Bleaching Prediction Web App")
-    st.markdown("Predict coral bleaching using environmental factors and ML models (Random Forest, XGBoost, LSTM, ARIMA).")
+    st.markdown("Predict coral bleaching using environmental factors and ML models (Random Forest, XGBoost, ARIMA).")
 
     # --- DATA UPLOAD ---
     uploaded_file = st.file_uploader("Upload your coral reef dataset (CSV)", type="csv")
