@@ -67,7 +67,7 @@ def main():
     target = 'Percent_Bleaching'
 
     # --- MODEL SELECTION ---
-    model_type = st.selectbox("Select Model", ["Random Forest (HuggingFace)", "XGBoost", "LSTM", "ARIMA"])
+    model_type = st.selectbox("Select Model", ["Random Forest (HuggingFace)", "XGBoost", "ARIMA"])
 
     # --- PREPROCESSING ---
     df = df.copy()
